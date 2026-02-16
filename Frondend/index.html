@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Download Manager</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="card">
+    <h2>Multithreaded Download Manager</h2>
+
+    <input id="url" placeholder="Enter file URL" oninput="validate()">
+
+    <input id="filename"
+           placeholder="Enter file name">
+
+    <button id="download" onclick="start()" disabled>
+        Download
+    </button>
+
+    <div class="progress-container">
+        <div id="progress"></div>
+    </div>
+
+    <p id="status"></p>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
