@@ -7,24 +7,44 @@
 <body>
 
 <div class="card">
+
     <h2>Multithreaded Download Manager</h2>
 
-    <input id="url" placeholder="Enter file URL" oninput="validate()">
+    <!-- URL Input -->
+    <input id="url"
+           placeholder="Enter file URL"
+           oninput="validate()">
 
-    <input id="filename"
-           placeholder="Enter file name">
-
-    <button id="download" onclick="start()" disabled>
-        Download
-    </button>
-
-    <div class="progress-container">
-        <div id="progress"></div>
+    <!-- Optional Filename Input -->
+   <div class="advanced-toggle" onclick="toggleAdvanced()">
+    ▼ Advanced Options
     </div>
 
+    <div id="advanced-section" style="display: none;">
+        <input id="filename" placeholder="Optional: Enter file name">
+    </div>
+
+
+    <!-- Download Button -->
+    <button id="download"
+            onclick="start()"
+            disabled>
+       ⬇️ Download
+    </button>
+
+    <!-- Overall Progress Bar -->
+    <div class="progress-container">
+        <div id="progress">0%</div>
+    </div>
+    <div id="threadContainer"></div>
+    <!-- Status Message -->
     <p id="status"></p>
+
+    <!-- Thread progress bars will be added dynamically here by script.js -->
+
 </div>
 
 <script src="script.js"></script>
+
 </body>
 </html>

@@ -1,85 +1,102 @@
+let interval;
+
 function validate() {
     const url = document.getElementById("url").value;
-    const btn = document.getElementById("download");
-
-    try {
-        new URL(url);
-        btn.disabled = false;
-    } catch {
-        btn.disabled = true;
-    }
+    document.getElementById("download").disabled = !url;
 }
 
 function start() {
+
     const url = document.getElementById("url").value;
-    const name = document.getElementById("filename").value.trim();
-    const status = document.getElementById("status");
-    const bar = document.getElementById("progress");
 
-    bar.style.width = "0%";
-    status.innerText = "Starting download...";
+    fetch("http://localhost:8000/download?url=" + encodeURIComponent(url), {
+         method: "POST"
+    })
+    
 
-    const xhr = new XMLHttpRequest();
 
-    xhr.open(
-        "GET",
-        "http://localhost:8080/download?" +
-        "url=" + encodeURIComponent(url) +
-        "&name=" + encodeURIComponent(name)
-    );
-
-    xhr.responseType = "blob";
-
-    // ✅ DOWNLOAD PROGRESS (server → browser)
-    xhr.onprogress = (e) => {
-        if (e.lengthComputable) {
-            const percent = (e.loaded / e.total) * 100;
-            bar.style.width = percent + "%";
-            status.innerText = "Downloading: " + percent.toFixed(1) + "%";
-        } else {
-            status.innerText = "Downloading...";
-        }
-    };
-
-    xhr.onload = () => {
-
-        // ❌ ERROR RESPONSE
-        if (xhr.status !== 200) {
-            const reader = new FileReader();
-
-            reader.onload = () => {
-                status.innerText = reader.result || "Download failed";
-            };
-
-            reader.readAsText(xhr.response);
-            return;
-        }
-
-        // ✅ SUCCESS
-        const blob = xhr.response;
-        const a = document.createElement("a");
-        const downloadUrl = URL.createObjectURL(blob);
-
-        a.href = downloadUrl;
-        const userName = document.getElementById("filename").value.trim();
-
-        a.download = userName
-        ? userName
-        : "downloaded_file";
-// use filename from backend
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-
-        URL.revokeObjectURL(downloadUrl);
-
-        bar.style.width = "100%";
-        status.innerText = "Download completed";
-    };
-
-    xhr.onerror = () => {
-        status.innerText = "Network error (connection failed)";
-    };
-
-    xhr.send();
+    .then(() => {
+        document.getElementById("status").innerText = "Downloading...";
+        startPolling();
+    })
+    .catch(() => {
+        document.getElementById("status").innerText = "Failed to start download";
+    });
 }
+
+function startPolling() {
+
+    clearInterval(interval);
+
+    interval = setInterval(() => {
+
+        fetch("http://localhost:8000/progress")
+        .then(res => res.json())
+        .then(data => {
+
+            // ========================
+            // UPDATE OVERALL BAR
+            // ========================
+            const overallBar = document.getElementById("progress");
+            overallBar.style.width = data.overall + "%";
+            overallBar.innerText = data.overall + "%";
+
+            // ========================
+            // THREAD VISUALIZATION
+            // ========================
+            updateThreads(data.threads);
+
+            if (data.overall >= 100) {
+                clearInterval(interval);
+                document.getElementById("status").innerText =
+        "Download completed and saved to Downloads folder!";
+                
+
+            }
+        });
+
+    }, 500);
+}
+
+function updateThreads(threads) {
+
+    let container = document.getElementById("threadContainer");
+
+    // If not exists, create dynamically
+    if (!container) {
+        container = document.createElement("div");
+        container.id = "threadContainer";
+        document.querySelector(".card").appendChild(container);
+    }
+
+    container.innerHTML = "";
+
+    threads.forEach((thread, index) => {
+
+        const box = document.createElement("div");
+        box.className = "thread-box";
+
+        box.innerHTML = `
+            <div class="thread-label">
+                Thread ${index + 1} - ${thread.status}
+            </div>
+            <div class="thread-bar">
+                <div class="thread-fill"
+                     style="width:${thread.progress}%">
+                </div>
+            </div>
+        `;
+
+        container.appendChild(box);
+    });
+}
+function toggleAdvanced() {
+    const section = document.getElementById("advanced-section");
+
+    if (section.style.display === "none") {
+        section.style.display = "block";
+    } else {
+        section.style.display = "none";
+    }
+}
+
