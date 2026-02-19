@@ -68,18 +68,36 @@ public class DownloadManager {
     private void multiThreadDownload(String tempName, long size) throws Exception {
 
         long chunk = size / threads;
+
+        RandomAccessFile sharedFile = new RandomAccessFile(tempName, "rw");
+        sharedFile.setLength(size);
+
         List<DownloadWorker> workers = new ArrayList<>();
 
         for (int i = 0; i < threads; i++) {
+
             long start = i * chunk;
-            long end = (i == threads - 1) ? size - 1 : start + chunk - 1;
-            workers.add(new DownloadWorker(url, start, end, i));
+            long end = (i == threads - 1)
+                    ? size - 1
+                    : start + chunk - 1;
+
+            DownloadWorker worker =
+                    new DownloadWorker(url, start, end, sharedFile);
+
+            workers.add(worker);
         }
 
-        for (DownloadWorker w : workers) w.start();
-        for (DownloadWorker w : workers) w.join();
+        // Start all threads
+        for (DownloadWorker w : workers) {
+            w.start();
+        }
 
-        FileMerger.merge(tempName, threads);
+        // Wait for all threads
+        for (DownloadWorker w : workers) {
+            w.join();
+        }
+
+        sharedFile.close();
     }
 
     // ============================
@@ -164,12 +182,53 @@ public class DownloadManager {
         String type = con.getContentType();
         if (type != null) {
             type = type.toLowerCase();
+            
+
             if (type.contains("pdf")) return "download.pdf";
             if (type.contains("zip")) return "download.zip";
+            if (type.contains("rar")) return "download.rar";
+            if (type.contains("7z")) return "download.7z";
+            if (type.contains("gzip") || type.contains("gz")) return "download.gz";
+            if (type.contains("tar")) return "download.tar";
+
             if (type.contains("mp4")) return "download.mp4";
             if (type.contains("mpeg")) return "download.mp3";
+            if (type.contains("mp3")) return "download.mp3";
+            if (type.contains("wav")) return "download.wav";
+            if (type.contains("aac")) return "download.aac";
+            if (type.contains("ogg")) return "download.ogg";
+            if (type.contains("flac")) return "download.flac";
+
+            if (type.contains("avi")) return "download.avi";
+            if (type.contains("mkv")) return "download.mkv";
+            if (type.contains("mov")) return "download.mov";
+            if (type.contains("wmv")) return "download.wmv";
+
             if (type.contains("png")) return "download.png";
-            if (type.contains("jpeg")) return "download.jpg";
+            if (type.contains("jpeg") || type.contains("jpg")) return "download.jpg";
+            if (type.contains("gif")) return "download.gif";
+            if (type.contains("bmp")) return "download.bmp";
+            if (type.contains("webp")) return "download.webp";
+            if (type.contains("svg")) return "download.svg";
+
+            if (type.contains("json")) return "download.json";
+            if (type.contains("xml")) return "download.xml";
+            if (type.contains("html")) return "download.html";
+            if (type.contains("css")) return "download.css";
+            if (type.contains("javascript")) return "download.js";
+            if (type.contains("csv")) return "download.csv";
+
+            if (type.contains("msword")) return "download.doc";
+            if (type.contains("officedocument.wordprocessingml")) return "download.docx";
+            if (type.contains("vnd.ms-excel")) return "download.xls";
+            if (type.contains("officedocument.spreadsheetml")) return "download.xlsx";
+            if (type.contains("vnd.ms-powerpoint")) return "download.ppt";
+            if (type.contains("officedocument.presentationml")) return "download.pptx";
+
+            if (type.contains("apk")) return "download.apk";
+            if (type.contains("exe")) return "download.exe";
+            if (type.contains("octet-stream")) return "download.bin";
+
         }
 
         return null;
