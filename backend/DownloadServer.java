@@ -12,6 +12,8 @@ public class DownloadServer {
 
     static List<DownloadWorker> workers = new ArrayList<>();
     static long fileSize = 0;
+    static volatile long singleDownloaded = 0;
+    static volatile boolean singleMode = false;
 
     public static void main(String[] args) throws Exception {
 
@@ -31,7 +33,7 @@ public class DownloadServer {
                 }
 
                 String urlString = null;
-                String fileName = null;
+                String userFileName = null;
 
                 String[] pairs = query.split("&");
 
@@ -43,19 +45,16 @@ public class DownloadServer {
                     String value = URLDecoder.decode(keyValue[1], "UTF-8");
 
                     if (key.equals("url")) urlString = value;
-                    if (key.equals("filename")) fileName = value;
+                    if (key.equals("filename")) userFileName = value;
                 }
 
-                if (urlString == null) {
+                if (urlString == null || urlString.isEmpty()) {
                     sendError(exchange, "URL parameter missing");
                     return;
                 }
 
-                if (fileName == null || fileName.isEmpty()) {
-                    fileName = detectFileName(urlString);
-                }
-
-                startDownload(urlString, fileName);
+                // 🔥 Pass raw user name — final logic happens inside startDownload
+                startDownload(urlString, userFileName);
 
                 String response = "Download Started";
                 exchange.sendResponseHeaders(200, response.length());
@@ -84,9 +83,7 @@ public class DownloadServer {
         server.start();
         System.out.println("Server started on port 8000");
     }
-
-    // ================= START DOWNLOAD =================
-    private static void startDownload(String urlString, String filename) {
+    private static void startDownload(String urlString, String userFileName) {
 
         try {
             workers.clear();
@@ -98,54 +95,54 @@ public class DownloadServer {
             meta.setRequestProperty("User-Agent", "Mozilla/5.0");
             meta.connect();
 
-            if (meta.getResponseCode() != 206) {
-                throw new Exception("Server does not support range.");
-            }
+            int responseCode = meta.getResponseCode();
+            boolean supportsRange = (responseCode == 206);
 
-            String contentRange = meta.getHeaderField("Content-Range");
+            String contentType = meta.getContentType();
 
-            fileSize = Long.parseLong(
-                    contentRange.substring(contentRange.lastIndexOf("/") + 1)
+            // 🔥 Build final filename correctly
+            String finalName = buildFinalFileName(
+                    userFileName,
+                    urlString,
+                    contentType
             );
 
-            meta.disconnect();
-
-            // 🔥 SAVE DIRECTLY TO DOWNLOADS FOLDER
             String downloadFolder =
                     System.getProperty("user.home") + "\\Downloads\\";
 
-            String fullPath = downloadFolder + filename;
+            String fullPath = downloadFolder + finalName;
 
-            System.out.println("Saving to: " + fullPath);
+            System.out.println("Saving as: " + fullPath);
 
-            RandomAccessFile file =
-                    new RandomAccessFile(fullPath, "rw");
+            if (supportsRange) {
 
-            file.setLength(fileSize);
+                String contentRange = meta.getHeaderField("Content-Range");
 
-            int threadCount = 4;
-            long chunkSize = fileSize / threadCount;
-            long remainder = fileSize % threadCount;
+                fileSize = Long.parseLong(
+                        contentRange.substring(contentRange.lastIndexOf("/") + 1)
+                );
 
-            long currentStart = 0;
+                meta.disconnect();
 
-            for (int i = 0; i < threadCount; i++) {
+                singleMode = false;
+                System.out.println("Multi-thread mode enabled.");
 
-                long currentChunk = chunkSize;
-                if (i == threadCount - 1) {
-                    currentChunk += remainder;
+                multiThreadDownload(url, fullPath);
+
+            } else {
+
+                fileSize = meta.getContentLengthLong();
+                if (fileSize <= 0) {
+                    fileSize = 1; // prevent divide-by-zero and negative values
                 }
+                meta.disconnect();
 
-                long start = currentStart;
-                long end = start + currentChunk - 1;
+                singleMode = true;
+                singleDownloaded = 0;
 
-                DownloadWorker worker =
-                        new DownloadWorker(url, start, end, file);
+                System.out.println("Single-thread mode enabled.");
 
-                workers.add(worker);
-                worker.start();
-
-                currentStart = end + 1;
+                singleThreadDownload(url, fullPath);
             }
 
         } catch (Exception e) {
@@ -155,7 +152,17 @@ public class DownloadServer {
 
     // ================= PROGRESS JSON =================
     private static String getProgressJSON() {
+        if (singleMode) {
 
+            int overall = (fileSize == 0) ? 0 :(int)((singleDownloaded * 100) / fileSize);
+
+            return "{ \"overall\": " + overall +
+                ", \"threads\": [" +
+                "{ \"progress\": " + overall +
+                ", \"status\": \"" +
+                (overall >= 100 ? "Completed" : "Running") +
+                "\" } ] }";
+        }
         if (workers.isEmpty()) {
             return "{ \"overall\":0, \"threads\":[] }";
         }
@@ -194,11 +201,195 @@ public class DownloadServer {
         exchange.close();
     }
 
-    private static String detectFileName(String url) {
-        String name = url.substring(url.lastIndexOf("/") + 1);
-        if (!name.contains(".")) {
-            name += ".bin";
+   private static String detectFileName(String urlString) {
+
+        try {
+            URL url = new URL(urlString);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0");
+            connection.connect();
+
+            String disposition = connection.getHeaderField("Content-Disposition");
+            String contentType = connection.getContentType();
+
+            // 1️⃣ Try Content-Disposition
+            if (disposition != null && disposition.contains("filename=")) {
+
+                String name = disposition.substring(
+                        disposition.indexOf("filename=") + 9
+                ).replace("\"", "");
+
+                name = sanitizeFileName(name);
+
+                return name;
+            }
+
+            // 2️⃣ Try URL path
+            String path = url.getPath();
+            String name = path.substring(path.lastIndexOf("/") + 1);
+
+            name = sanitizeFileName(name);
+
+            // 3️⃣ If no extension → detect from Content-Type
+            if (!name.contains(".")) {
+                name += getExtensionFromContentType(contentType);
+            }
+
+            return name;
+
+        } catch (Exception e) {
+            return null;
         }
-        return name;
     }
+    private static void multiThreadDownload(URL url, String fullPath) throws Exception {
+
+        RandomAccessFile file = new RandomAccessFile(fullPath, "rw");
+        file.setLength(fileSize);
+
+        int threadCount = 4;
+        long chunkSize = fileSize / threadCount;
+        long remainder = fileSize % threadCount;
+
+        long currentStart = 0;
+
+        for (int i = 0; i < threadCount; i++) {
+
+            long currentChunk = chunkSize;
+            if (i == threadCount - 1) currentChunk += remainder;
+
+            long start = currentStart;
+            long end = start + currentChunk - 1;
+
+            DownloadWorker worker =
+                    new DownloadWorker(url, start, end, file);
+
+            workers.add(worker);
+            worker.start();
+
+            currentStart = end + 1;
+        }
+    }
+    private static void singleThreadDownload(URL url, String fullPath) throws Exception {
+
+        FileOutputStream fos = new FileOutputStream(fullPath);
+
+        HttpURLConnection connection =
+                (HttpURLConnection) url.openConnection();
+
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0");
+        connection.connect();
+
+        InputStream input = connection.getInputStream();
+        byte[] buffer = new byte[8192];
+        int bytesRead;
+
+        while ((bytesRead = input.read(buffer)) != -1) {
+
+            fos.write(buffer, 0, bytesRead);
+            singleDownloaded += bytesRead;
+        }
+
+        fos.close();
+        input.close();
+    }
+    private static String sanitizeFileName(String name) {
+
+        if (name == null || name.trim().isEmpty()) {
+            return null;
+        }
+
+        // Remove query parameters if present
+        if (name.contains("?")) {
+            name = name.substring(0, name.indexOf("?"));
+        }
+
+        // Remove invalid Windows characters
+        name = name.replaceAll("[\\\\/:*?\"<>|]", "");
+
+        return name.trim();
+    }
+    private static String getExtensionFromContentType(String type) {
+
+        if (type == null) return ".bin";
+
+        type = type.toLowerCase();
+
+        if (type.contains("pdf")) return ".pdf";
+        if (type.contains("zip")) return ".zip";
+        if (type.contains("rar")) return ".rar";
+        if (type.contains("7z")) return ".7z";
+        if (type.contains("gzip") || type.contains("gz")) return ".gz";
+        if (type.contains("tar")) return ".tar";
+
+        if (type.contains("mp4")) return ".mp4";
+        if (type.contains("mpeg")) return ".mp3";
+        if (type.contains("mp3")) return ".mp3";
+        if (type.contains("wav")) return ".wav";
+        if (type.contains("aac")) return ".aac";
+        if (type.contains("ogg")) return ".ogg";
+        if (type.contains("flac")) return ".flac";
+
+        if (type.contains("avi")) return ".avi";
+        if (type.contains("mkv")) return ".mkv";
+        if (type.contains("mov")) return ".mov";
+        if (type.contains("wmv")) return ".wmv";
+
+        if (type.contains("png")) return ".png";
+        if (type.contains("jpeg") || type.contains("jpg")) return ".jpg";
+        if (type.contains("gif")) return ".gif";
+        if (type.contains("bmp")) return ".bmp";
+        if (type.contains("webp")) return ".webp";
+        if (type.contains("svg")) return ".svg";
+
+        if (type.contains("json")) return ".json";
+        if (type.contains("xml")) return ".xml";
+        if (type.contains("html")) return ".html";
+        if (type.contains("css")) return ".css";
+        if (type.contains("javascript")) return ".js";
+        if (type.contains("csv")) return ".csv";
+
+        if (type.contains("msword")) return ".doc";
+        if (type.contains("officedocument.wordprocessingml")) return ".docx";
+        if (type.contains("vnd.ms-excel")) return ".xls";
+        if (type.contains("officedocument.spreadsheetml")) return ".xlsx";
+        if (type.contains("vnd.ms-powerpoint")) return ".ppt";
+        if (type.contains("officedocument.presentationml")) return ".pptx";
+
+        if (type.contains("apk")) return ".apk";
+        if (type.contains("exe")) return ".exe";
+        if (type.contains("octet-stream")) return ".bin";
+
+    return ".bin";
+    }
+    private static String buildFinalFileName(String userName,String urlString,String contentType) {
+
+        // 1️⃣ Sanitize user name
+        if (userName != null) {
+            userName = sanitizeFileName(userName);
+        }
+
+        // 2️⃣ If user provided name
+        if (userName != null && !userName.isEmpty()) {
+
+            // If user already included extension
+            if (userName.contains(".")) {
+                return userName;
+            }
+
+            // No extension → detect and append
+            String ext = getExtensionFromContentType(contentType);
+            return userName + ext;
+        }
+
+        // 3️⃣ No user name → detect from server
+        String detected = detectFileName(urlString);
+
+        if (detected != null && !detected.isEmpty()) {
+            return detected;
+        }
+
+        // 4️⃣ Final fallback
+        return "download_" + System.currentTimeMillis() + ".bin";
+    }
+    
 }
